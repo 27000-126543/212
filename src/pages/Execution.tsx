@@ -268,7 +268,7 @@ export default function Execution() {
 
   const prevStatusRef = useRef<string>('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const forceRefreshRef = useRef<number>(0);
+  const [forceRefresh, setForceRefresh] = useState<number>(0);
 
   useEffect(() => {
     if (activeTasks.length > 0 && (!selectedTaskId || !activeTasks.find((t) => t.id === selectedTaskId))) {
@@ -299,7 +299,7 @@ export default function Execution() {
       `scheduledTime: ${new Date(selectedTask.scheduledTime).toLocaleString('zh-CN')}, ` +
       `重新计算countdown: ${diff}秒 (${formatCountdown(diff)}), ` +
       `工位: ${selectedTask.padName}, ` +
-      `forceRefresh: ${forceRefreshRef.current}`
+      `forceRefresh: ${forceRefresh}`
     );
 
     if (timerRef.current) {
@@ -328,7 +328,7 @@ export default function Execution() {
         timerRef.current = null;
       }
     };
-  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status, forceRefreshRef.current]);
+  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status, forceRefresh]);
 
   useEffect(() => {
     if (!selectedTask) return;
@@ -374,6 +374,7 @@ export default function Execution() {
   }, [selectedTask, launchPads, equipment]);
 
   const handleCheckSubsystem = useCallback((key: SubsystemKey) => {
+    console.log(`[子系统校验] 开始校验: ${key}, 任务: ${selectedTask?.name}`);
     setSubsystems((prev) =>
       prev.map((s) => (s.key === key ? { ...s, checking: true } : s))
     );
@@ -419,9 +420,11 @@ export default function Execution() {
             checkedAt: new Date().toISOString(),
           };
         });
+        console.log(`[子系统校验] 先更新Store checklist: ${key}, 结果: ${result.status}`);
         updateTask(selectedTask.id, { checklist: updatedChecklist });
       }
 
+      console.log(`[子系统校验] 后同步subsystems状态: ${key}, 结果: ${result.status}, 详情: ${result.details.join('; ')}`);
       setSubsystems((prev) =>
         prev.map((s) =>
           s.key === key
@@ -466,6 +469,7 @@ export default function Execution() {
 
   const handleSwitchToBackup = useCallback(() => {
     if (!selectedTask) return;
+    console.log(`[切换备用方案] 开始切换, 当前任务: ${selectedTask.name}, 当前工位: ${selectedTask.padName}`);
     switchToBackupPlan(selectedTask.id);
     setShowSwitchConfirm(false);
     setShowAbortDialog(false);
@@ -474,6 +478,8 @@ export default function Execution() {
     setSubsystems((prev) =>
       prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false, checkDetails: [] }))
     );
+    setForceRefresh((prev) => prev + 1);
+    console.log(`[切换备用方案] 切换完成, forceRefresh+1, subsystems已重置为pending, prevStatusRef已清空`);
   }, [selectedTask, switchToBackupPlan]);
 
   const handlePhaseTransition = useCallback(
