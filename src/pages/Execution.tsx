@@ -267,6 +267,7 @@ export default function Execution() {
   );
 
   const prevStatusRef = useRef<string>('');
+  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     if (activeTasks.length > 0 && (!selectedTaskId || !activeTasks.find((t) => t.id === selectedTaskId))) {
@@ -279,6 +280,10 @@ export default function Execution() {
   useEffect(() => {
     if (!selectedTask) {
       setCountdown(0);
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
       return;
     }
 
@@ -286,18 +291,34 @@ export default function Execution() {
     const now = Date.now();
     const diff = Math.max(0, Math.floor((scheduled - now) / 1000));
     setCountdown(diff);
-  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status]);
 
-  useEffect(() => {
-    if (!selectedTask || countdown <= 0) return;
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) return 0;
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [selectedTask?.id, countdown > 0]);
+    if (timerRef.current) {
+      clearInterval(timerRef.current);
+      timerRef.current = null;
+    }
+
+    if (diff > 0) {
+      timerRef.current = setInterval(() => {
+        setCountdown((prev) => {
+          if (prev <= 1) {
+            if (timerRef.current) {
+              clearInterval(timerRef.current);
+              timerRef.current = null;
+            }
+            return 0;
+          }
+          return prev - 1;
+        });
+      }, 1000);
+    }
+
+    return () => {
+      if (timerRef.current) {
+        clearInterval(timerRef.current);
+        timerRef.current = null;
+      }
+    };
+  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status]);
 
   useEffect(() => {
     if (!selectedTask) return;
@@ -309,11 +330,6 @@ export default function Execution() {
     setSubsystems((prev) =>
       prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false, checkDetails: [] }))
     );
-
-    const scheduled = new Date(selectedTask.scheduledTime).getTime();
-    const now = Date.now();
-    const diff = Math.max(0, Math.floor((scheduled - now) / 1000));
-    setCountdown(diff);
   }, [selectedTask]);
 
   useEffect(() => {
@@ -327,6 +343,7 @@ export default function Execution() {
     }
     setSubsystems((prev) =>
       prev.map((s) => {
+        if (s.checking) return s;
         const matchedCategory = Object.entries(SUBSYSTEM_CATEGORY_MAP).find(([, key]) => key === s.key);
         const category = matchedCategory ? matchedCategory[0] : '';
         const checklistStatus = checklistByCategory[category];
@@ -374,6 +391,27 @@ export default function Execution() {
           result = { status: 'failed', details: ['未知子系统'] };
       }
 
+      const categoryMap: Record<SubsystemKey, string> = {
+        propulsion: '推进',
+        telemetry_ctrl: '测控',
+        telemetry: '遥测',
+        safety: '安全',
+        fueling: '加注',
+      };
+      const category = categoryMap[key];
+
+      if (selectedTask) {
+        const updatedChecklist = selectedTask.checklist.map((item) => {
+          if (item.category !== category) return item;
+          return {
+            ...item,
+            status: result.status === 'passed' ? 'passed' as const : 'failed' as const,
+            checkedAt: new Date().toISOString(),
+          };
+        });
+        updateTask(selectedTask.id, { checklist: updatedChecklist });
+      }
+
       setSubsystems((prev) =>
         prev.map((s) =>
           s.key === key
@@ -387,26 +425,6 @@ export default function Execution() {
             : s
         )
       );
-
-      if (selectedTask) {
-        const categoryMap: Record<SubsystemKey, string> = {
-          propulsion: '推进',
-          telemetry_ctrl: '测控',
-          telemetry: '遥测',
-          safety: '安全',
-          fueling: '加注',
-        };
-        const category = categoryMap[key];
-        const updatedChecklist = selectedTask.checklist.map((item) => {
-          if (item.category !== category) return item;
-          return {
-            ...item,
-            status: result.status === 'passed' ? 'passed' as const : 'failed' as const,
-            checkedAt: new Date().toISOString(),
-          };
-        });
-        updateTask(selectedTask.id, { checklist: updatedChecklist });
-      }
     }, 1500);
   }, [padEquipment, equipment, selectedTask, updateTask]);
 
@@ -440,6 +458,12 @@ export default function Execution() {
     if (!selectedTask) return;
     switchToBackupPlan(selectedTask.id);
     setShowSwitchConfirm(false);
+    setShowAbortDialog(false);
+    setAbortReason('');
+    prevStatusRef.current = '';
+    setSubsystems((prev) =>
+      prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false, checkDetails: [] }))
+    );
   }, [selectedTask, switchToBackupPlan]);
 
   const handlePhaseTransition = useCallback(
