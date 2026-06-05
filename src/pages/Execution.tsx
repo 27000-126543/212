@@ -268,6 +268,7 @@ export default function Execution() {
 
   const prevStatusRef = useRef<string>('');
   const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const forceRefreshRef = useRef<number>(0);
 
   useEffect(() => {
     if (activeTasks.length > 0 && (!selectedTaskId || !activeTasks.find((t) => t.id === selectedTaskId))) {
@@ -291,6 +292,15 @@ export default function Execution() {
     const now = Date.now();
     const diff = Math.max(0, Math.floor((scheduled - now) / 1000));
     setCountdown(diff);
+
+    console.log(
+      `[倒计时] 任务ID: ${selectedTask.id}, 任务名: ${selectedTask.name}, ` +
+      `状态: ${selectedTask.status}, ` +
+      `scheduledTime: ${new Date(selectedTask.scheduledTime).toLocaleString('zh-CN')}, ` +
+      `重新计算countdown: ${diff}秒 (${formatCountdown(diff)}), ` +
+      `工位: ${selectedTask.padName}, ` +
+      `forceRefresh: ${forceRefreshRef.current}`
+    );
 
     if (timerRef.current) {
       clearInterval(timerRef.current);
@@ -318,7 +328,7 @@ export default function Execution() {
         timerRef.current = null;
       }
     };
-  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status]);
+  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status, forceRefreshRef.current]);
 
   useEffect(() => {
     if (!selectedTask) return;
