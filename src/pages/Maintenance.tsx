@@ -602,8 +602,11 @@ export default function Maintenance() {
     setPrefillEquipment(undefined);
   };
 
+  const [autoGenResult, setAutoGenResult] = useState<{orders: number; deductions: number} | null>(null);
+
   const handleAutoGenerate = () => {
     const result = autoGenerateMaintenanceOrders(equipmentStore, maintenanceOrdersStore, sparePartsStore);
+    let orderCount = 0;
     for (const order of result.orders) {
       const id = `mo-auto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
       addMaintenanceOrder({
@@ -621,10 +624,15 @@ export default function Maintenance() {
         estimatedHours: order.estimatedHours!,
         actualHours: order.actualHours!,
       });
+      orderCount++;
     }
+    let deductionCount = 0;
     for (const deduction of result.partDeductions) {
       useSparePart(deduction.partId, deduction.quantity);
+      deductionCount++;
     }
+    setAutoGenResult({ orders: orderCount, deductions: deductionCount });
+    setTimeout(() => setAutoGenResult(null), 5000);
   };
 
   return (
@@ -642,6 +650,15 @@ export default function Maintenance() {
           自动生成工单
         </button>
       </div>
+      {autoGenResult && (
+        <div className="flex items-center gap-3 px-4 py-3 rounded-lg bg-cyber-green/10 border border-cyber-green/30 text-cyber-green text-sm">
+          <CheckCircle2 className="w-4 h-4 flex-shrink-0" />
+          <span>
+            自动生成完成：新增 <strong className="font-mono">{autoGenResult.orders}</strong> 条维保工单，
+            扣减 <strong className="font-mono">{autoGenResult.deductions}</strong> 项备件库存
+          </span>
+        </div>
+      )}
 
       <div className="flex gap-1 p-1 bg-space-800/60 border border-cyber-blue/10 rounded-lg w-fit">
         {TABS.map((tab) => (

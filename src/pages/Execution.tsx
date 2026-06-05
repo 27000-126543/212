@@ -1,13 +1,18 @@
-import { useState, useEffect, useCallback, useMemo } from 'react';
+import { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   ChevronDown, Timer, Zap, Radio, ShieldCheck, Fuel,
   OctagonAlert, CheckCircle2, XCircle, Clock, Play,
-  ArrowRight, AlertTriangle, RotateCcw
+  ArrowRight, AlertTriangle, RotateCcw, ArrowLeftRight
 } from 'lucide-react';
 import { useStore } from '@/store';
-import type { LaunchTask, ChecklistItem } from '@/types';
+import type { LaunchTask, ChecklistItem, Equipment } from '@/types';
 
 type SubsystemKey = 'propulsion' | 'telemetry_ctrl' | 'telemetry' | 'safety' | 'fueling';
+
+interface SubsystemCheckResult {
+  status: 'passed' | 'failed';
+  details: string[];
+}
 
 interface SubsystemState {
   key: SubsystemKey;
@@ -16,6 +21,7 @@ interface SubsystemState {
   status: 'passed' | 'pending' | 'failed';
   progress: number;
   checking: boolean;
+  checkDetails: string[];
 }
 
 const PHASE_CONFIG: Record<string, { label: string; color: string; bg: string; border: string; progress: number }> = {
@@ -40,7 +46,7 @@ const SUBSYSTEM_CATEGORY_MAP: Record<string, SubsystemKey> = {
 };
 
 function formatCountdown(totalSeconds: number): string {
-  if (totalSeconds <= 0) return 'T-00:00:00:00';
+  if (totalSeconds <= 0) return 'T+00:00:00:00';
   const days = Math.floor(totalSeconds / 86400);
   const hours = Math.floor((totalSeconds % 86400) / 3600);
   const minutes = Math.floor((totalSeconds % 3600) / 60);
@@ -48,26 +54,211 @@ function formatCountdown(totalSeconds: number): string {
   return `T-${String(days).padStart(2, '0')}:${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
 }
 
+function checkPropulsion(
+  padEquipment: Equipment[],
+  allEquipment: Equipment[],
+  task: LaunchTask
+): SubsystemCheckResult {
+  const details: string[] = [];
+  let passed = true;
+
+  const fuelingOnline = padEquipment.filter(
+    (eq) => eq.category === 'fueling' && eq.status === 'online'
+  );
+  const fuelingOffline = padEquipment.filter(
+    (eq) => eq.category === 'fueling' && eq.status !== 'online'
+  );
+
+  if (fuelingOnline.length > 0) {
+    details.push(`加注设备在线：${fuelingOnline.length}台`);
+  } else {
+    details.push(`无在线加注设备`);
+    passed = false;
+  }
+
+  if (fuelingOffline.length > 0) {
+    details.push(`加注设备离线/维保：${fuelingOffline.map((e) => e.name).join('、')}`);
+  }
+
+  const fuelLevel = task.status === 'fueling'
+    ? 45 + Math.floor(Math.random() * 30)
+    : task.status === 'launch'
+      ? 95 + Math.floor(Math.random() * 5)
+      : 0;
+
+  if (task.status === 'fueling' || task.status === 'launch') {
+    details.push(`燃料余量：${fuelLevel}%`);
+    if (fuelLevel < 30) {
+      passed = false;
+      details.push('燃料余量不足30%，无法执行发射');
+    }
+  } else {
+    details.push(`燃料余量：待加注`);
+  }
+
+  if (fuelingOnline.length === 0 && task.status !== 'scheduled') {
+    passed = false;
+  }
+
+  return { status: passed ? 'passed' : 'failed', details };
+}
+
+function checkTelemetryCtrl(
+  allEquipment: Equipment[],
+  _task: LaunchTask
+): SubsystemCheckResult {
+  const details: string[] = [];
+  let passed = true;
+
+  const telemetryOnline = allEquipment.filter(
+    (eq) => eq.category === 'telemetry' && eq.status === 'online'
+  );
+  const telemetryMaintenance = allEquipment.filter(
+    (eq) => eq.category === 'telemetry' && eq.status === 'maintenance'
+  );
+  const telemetryOffline = allEquipment.filter(
+    (eq) => eq.category === 'telemetry' && eq.status === 'offline'
+  );
+
+  details.push(`测控设备在线：${telemetryOnline.length}台`);
+
+  if (telemetryOnline.length === 0) {
+    passed = false;
+    details.push('无在线测控设备，无法提供测控支持');
+  } else if (telemetryOnline.length < 2) {
+    details.push('仅1台测控设备在线，冗余不足');
+  } else {
+    details.push(`测控冗余：${telemetryOnline.length}台，满足≥2台要求`);
+  }
+
+  if (telemetryMaintenance.length > 0) {
+    details.push(`维保中：${telemetryMaintenance.map((e) => e.name).join('、')}`);
+  }
+  if (telemetryOffline.length > 0) {
+    details.push(`离线：${telemetryOffline.map((e) => e.name).join('、')}`);
+  }
+
+  return { status: passed ? 'passed' : 'failed', details };
+}
+
+function checkTelemetry(
+  allEquipment: Equipment[],
+  _task: LaunchTask
+): SubsystemCheckResult {
+  const details: string[] = [];
+  let passed = true;
+
+  const telemetryOnline = allEquipment.filter(
+    (eq) => eq.category === 'telemetry' && eq.status === 'online'
+  );
+
+  if (telemetryOnline.length === 0) {
+    passed = false;
+    details.push('无在线遥测设备');
+  } else {
+    const maxTemp = Math.max(...telemetryOnline.map((e) => e.temperature));
+    details.push(`遥测设备在线：${telemetryOnline.length}台`);
+    details.push(`设备最高温度：${maxTemp}°C`);
+
+    if (maxTemp > 60) {
+      passed = false;
+      details.push(`设备过热（>${60}°C），遥测精度受影响`);
+    } else if (maxTemp > 50) {
+      details.push('设备温度偏高，建议关注');
+    }
+  }
+
+  return { status: passed ? 'passed' : 'failed', details };
+}
+
+function checkSafety(
+  padEquipment: Equipment[],
+  _task: LaunchTask
+): SubsystemCheckResult {
+  const details: string[] = [];
+  let passed = true;
+
+  const onlineEquip = padEquipment.filter((eq) => eq.status === 'online');
+  const offlineEquip = padEquipment.filter((eq) => eq.status === 'offline');
+
+  details.push(`工位设备在线：${onlineEquip.length}/${padEquipment.length}台`);
+
+  if (offlineEquip.length > 0) {
+    details.push(`离线设备：${offlineEquip.map((e) => e.name).join('、')}`);
+    if (offlineEquip.length >= padEquipment.length / 2) {
+      passed = false;
+      details.push('离线设备过多，安全风险较高');
+    }
+  }
+
+  const highTempEquip = padEquipment.filter((eq) => eq.temperature > 60);
+  if (highTempEquip.length > 0) {
+    details.push(`高温设备：${highTempEquip.map((e) => `${e.name}(${e.temperature}°C)`).join('、')}`);
+    if (highTempEquip.length >= 2) {
+      passed = false;
+      details.push('多台设备过热，安全系统不满足发射条件');
+    }
+  }
+
+  return { status: passed ? 'passed' : 'failed', details };
+}
+
+function checkFueling(
+  padEquipment: Equipment[],
+  _task: LaunchTask
+): SubsystemCheckResult {
+  const details: string[] = [];
+  let passed = true;
+
+  const fuelingEquip = padEquipment.filter((eq) => eq.category === 'fueling');
+  const fuelingOnline = fuelingEquip.filter((eq) => eq.status === 'online');
+
+  if (fuelingEquip.length === 0) {
+    details.push('工位无加注设备');
+    passed = false;
+  } else {
+    details.push(`加注设备：${fuelingOnline.length}/${fuelingEquip.length}台在线`);
+
+    if (fuelingOnline.length === 0) {
+      passed = false;
+      details.push('所有加注设备均不在线，无法执行加注');
+    } else {
+      for (const fe of fuelingOnline) {
+        details.push(`${fe.name}：运行${fe.totalRunHours}h，温度${fe.temperature}°C`);
+        if (fe.temperature > 55) {
+          passed = false;
+          details.push(`${fe.name}温度过高（>${55}°C），加注风险高`);
+        }
+      }
+    }
+  }
+
+  return { status: passed ? 'passed' : 'failed', details };
+}
+
 export default function Execution() {
   const tasks = useStore((s) => s.tasks);
   const updateTask = useStore((s) => s.updateTask);
   const abortTaskAndSwitch = useStore((s) => s.abortTaskAndSwitch);
+  const switchToBackupPlan = useStore((s) => s.switchToBackupPlan);
+  const launchPads = useStore((s) => s.launchPads);
+  const equipment = useStore((s) => s.equipment);
 
   const activeTasks = useMemo(
-    () => tasks.filter((t) => ['preparing', 'fueling', 'scheduled'].includes(t.status)),
+    () => tasks.filter((t) => ['preparing', 'fueling', 'scheduled', 'launch'].includes(t.status)),
     [tasks]
   );
 
   const [selectedTaskId, setSelectedTaskId] = useState<string>('');
-  const [countdown, setCountdown] = useState(0);
   const [showAbortDialog, setShowAbortDialog] = useState(false);
   const [abortReason, setAbortReason] = useState('');
+  const [showSwitchConfirm, setShowSwitchConfirm] = useState(false);
   const [subsystems, setSubsystems] = useState<SubsystemState[]>([
-    { key: 'propulsion', name: '推进系统', icon: Zap, status: 'pending', progress: 0, checking: false },
-    { key: 'telemetry_ctrl', name: '测控系统', icon: Radio, status: 'pending', progress: 0, checking: false },
-    { key: 'telemetry', name: '遥测系统', icon: Timer, status: 'pending', progress: 0, checking: false },
-    { key: 'safety', name: '安全系统', icon: ShieldCheck, status: 'pending', progress: 0, checking: false },
-    { key: 'fueling', name: '加注系统', icon: Fuel, status: 'pending', progress: 0, checking: false },
+    { key: 'propulsion', name: '推进系统', icon: Zap, status: 'pending', progress: 0, checking: false, checkDetails: [] },
+    { key: 'telemetry_ctrl', name: '测控系统', icon: Radio, status: 'pending', progress: 0, checking: false, checkDetails: [] },
+    { key: 'telemetry', name: '遥测系统', icon: Timer, status: 'pending', progress: 0, checking: false, checkDetails: [] },
+    { key: 'safety', name: '安全系统', icon: ShieldCheck, status: 'pending', progress: 0, checking: false, checkDetails: [] },
+    { key: 'fueling', name: '加注系统', icon: Fuel, status: 'pending', progress: 0, checking: false, checkDetails: [] },
   ]);
 
   const selectedTask = useMemo(
@@ -75,17 +266,50 @@ export default function Execution() {
     [tasks, selectedTaskId]
   );
 
+  const prevStatusRef = useRef<string>('');
+
   useEffect(() => {
     if (activeTasks.length > 0 && (!selectedTaskId || !activeTasks.find((t) => t.id === selectedTaskId))) {
       setSelectedTaskId(activeTasks[0].id);
     }
   }, [activeTasks, selectedTaskId]);
 
+  const [countdown, setCountdown] = useState(0);
+
   useEffect(() => {
     if (!selectedTask) {
       setCountdown(0);
       return;
     }
+
+    const scheduled = new Date(selectedTask.scheduledTime).getTime();
+    const now = Date.now();
+    const diff = Math.max(0, Math.floor((scheduled - now) / 1000));
+    setCountdown(diff);
+  }, [selectedTask?.id, selectedTask?.scheduledTime, selectedTask?.status]);
+
+  useEffect(() => {
+    if (!selectedTask || countdown <= 0) return;
+    const timer = setInterval(() => {
+      setCountdown((prev) => {
+        if (prev <= 1) return 0;
+        return prev - 1;
+      });
+    }, 1000);
+    return () => clearInterval(timer);
+  }, [selectedTask?.id, countdown > 0]);
+
+  useEffect(() => {
+    if (!selectedTask) return;
+
+    const currentStatus = selectedTask.status;
+    if (prevStatusRef.current === currentStatus) return;
+    prevStatusRef.current = currentStatus;
+
+    setSubsystems((prev) =>
+      prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false, checkDetails: [] }))
+    );
+
     const scheduled = new Date(selectedTask.scheduledTime).getTime();
     const now = Date.now();
     const diff = Math.max(0, Math.floor((scheduled - now) / 1000));
@@ -93,22 +317,8 @@ export default function Execution() {
   }, [selectedTask]);
 
   useEffect(() => {
-    if (!selectedTask || countdown <= 0) return;
-    const timer = setInterval(() => {
-      setCountdown((prev) => {
-        if (prev <= 1) {
-          clearInterval(timer);
-          return 0;
-        }
-        return prev - 1;
-      });
-    }, 1000);
-    return () => clearInterval(timer);
-  }, [selectedTask, countdown > 0]);
-
-  useEffect(() => {
     if (!selectedTask) {
-      setSubsystems((prev) => prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false })));
+      setSubsystems((prev) => prev.map((s) => ({ ...s, status: 'pending' as const, progress: 0, checking: false, checkDetails: [] })));
       return;
     }
     const checklistByCategory: Record<string, ChecklistItem['status']> = {};
@@ -127,21 +337,78 @@ export default function Execution() {
     );
   }, [selectedTask]);
 
+  const padEquipment = useMemo(() => {
+    if (!selectedTask) return [];
+    const pad = launchPads.find((p) => p.id === selectedTask.padId);
+    if (!pad) return [];
+    return pad.equipment
+      .map((eqId) => equipment.find((eq) => eq.id === eqId))
+      .filter((eq): eq is Equipment => eq !== undefined);
+  }, [selectedTask, launchPads, equipment]);
+
   const handleCheckSubsystem = useCallback((key: SubsystemKey) => {
     setSubsystems((prev) =>
       prev.map((s) => (s.key === key ? { ...s, checking: true } : s))
     );
+
     setTimeout(() => {
-      const passed = Math.random() > 0.2;
+      let result: SubsystemCheckResult;
+
+      switch (key) {
+        case 'propulsion':
+          result = checkPropulsion(padEquipment, equipment, selectedTask!);
+          break;
+        case 'telemetry_ctrl':
+          result = checkTelemetryCtrl(equipment, selectedTask!);
+          break;
+        case 'telemetry':
+          result = checkTelemetry(equipment, selectedTask!);
+          break;
+        case 'safety':
+          result = checkSafety(padEquipment, selectedTask!);
+          break;
+        case 'fueling':
+          result = checkFueling(padEquipment, selectedTask!);
+          break;
+        default:
+          result = { status: 'failed', details: ['未知子系统'] };
+      }
+
       setSubsystems((prev) =>
         prev.map((s) =>
           s.key === key
-            ? { ...s, checking: false, status: passed ? 'passed' : 'failed', progress: passed ? 100 : 35 }
+            ? {
+                ...s,
+                checking: false,
+                status: result.status,
+                progress: result.status === 'passed' ? 100 : 35,
+                checkDetails: result.details,
+              }
             : s
         )
       );
+
+      if (selectedTask) {
+        const categoryMap: Record<SubsystemKey, string> = {
+          propulsion: '推进',
+          telemetry_ctrl: '测控',
+          telemetry: '遥测',
+          safety: '安全',
+          fueling: '加注',
+        };
+        const category = categoryMap[key];
+        const updatedChecklist = selectedTask.checklist.map((item) => {
+          if (item.category !== category) return item;
+          return {
+            ...item,
+            status: result.status === 'passed' ? 'passed' as const : 'failed' as const,
+            checkedAt: new Date().toISOString(),
+          };
+        });
+        updateTask(selectedTask.id, { checklist: updatedChecklist });
+      }
     }, 1500);
-  }, []);
+  }, [padEquipment, equipment, selectedTask, updateTask]);
 
   const handleToggleChecklist = useCallback(
     (itemId: string) => {
@@ -169,12 +436,43 @@ export default function Execution() {
     setSelectedTaskId('');
   }, [selectedTask, abortReason, abortTaskAndSwitch]);
 
+  const handleSwitchToBackup = useCallback(() => {
+    if (!selectedTask) return;
+    switchToBackupPlan(selectedTask.id);
+    setShowSwitchConfirm(false);
+  }, [selectedTask, switchToBackupPlan]);
+
   const handlePhaseTransition = useCallback(
     (nextStatus: LaunchTask['status']) => {
       if (!selectedTask) return;
+
+      if (nextStatus === 'fueling' || nextStatus === 'launch') {
+        const allPassed = subsystems.every((s) => s.status === 'passed');
+        if (!allPassed) return;
+      }
+
       updateTask(selectedTask.id, { status: nextStatus });
+
+      if (nextStatus === 'preparing') {
+        const pad = launchPads.find((p) => p.id === selectedTask.padId);
+        if (pad) {
+          const updatedPads = launchPads.map((p) =>
+            p.id === selectedTask.padId ? { ...p, status: 'preparing' as const } : p
+          );
+          useStore.setState({ launchPads: updatedPads });
+        }
+      }
+      if (nextStatus === 'fueling') {
+        const pad = launchPads.find((p) => p.id === selectedTask.padId);
+        if (pad) {
+          const updatedPads = launchPads.map((p) =>
+            p.id === selectedTask.padId ? { ...p, status: 'occupied' as const } : p
+          );
+          useStore.setState({ launchPads: updatedPads });
+        }
+      }
     },
-    [selectedTask, updateTask]
+    [selectedTask, subsystems, updateTask, launchPads]
   );
 
   const phase = selectedTask ? PHASE_CONFIG[selectedTask.status] : null;
@@ -191,7 +489,10 @@ export default function Execution() {
           <div className="relative">
             <select
               value={selectedTaskId}
-              onChange={(e) => setSelectedTaskId(e.target.value)}
+              onChange={(e) => {
+                setSelectedTaskId(e.target.value);
+                prevStatusRef.current = '';
+              }}
               className="select-field pr-8 min-w-[280px] appearance-none cursor-pointer"
             >
               {activeTasks.length === 0 && (
@@ -212,7 +513,7 @@ export default function Execution() {
         <div className="glass-card glow-border p-16 flex flex-col items-center justify-center text-slate-500">
           <OctagonAlert className="w-12 h-12 mb-4 opacity-30" />
           <p className="text-lg">请选择一个可执行任务</p>
-          <p className="text-sm mt-1">仅显示准备中、加注中、已排程的任务</p>
+          <p className="text-sm mt-1">仅显示待命、准备中、加注中、发射中的任务</p>
         </div>
       ) : (
         <>
@@ -313,12 +614,21 @@ export default function Execution() {
                           }}
                         />
                       </div>
+                      {sub.checkDetails.length > 0 && (
+                        <div className="mt-2 space-y-0.5">
+                          {sub.checkDetails.map((detail, i) => (
+                            <div key={i} className={`text-[11px] ${sub.status === 'passed' ? 'text-cyber-green/70' : sub.status === 'failed' ? 'text-cyber-red/70' : 'text-slate-500'}`}>
+                              {sub.status === 'passed' ? '✓' : sub.status === 'failed' ? '✗' : '○'} {detail}
+                            </div>
+                          ))}
+                        </div>
+                      )}
                     </div>
                   );
                 })}
                 <div className={`mt-2 flex items-center gap-2 text-sm px-3 py-2 rounded-lg ${allSubsystemsPassed ? 'bg-cyber-green/10 text-cyber-green' : 'bg-cyber-yellow/10 text-cyber-yellow'}`}>
                   {allSubsystemsPassed ? <CheckCircle2 className="w-4 h-4" /> : <AlertTriangle className="w-4 h-4" />}
-                  {allSubsystemsPassed ? '所有子系统校验通过' : '部分子系统尚未通过校验'}
+                  {allSubsystemsPassed ? '所有子系统校验通过，可执行阶段转换' : '部分子系统尚未通过校验，无法进入下一阶段'}
                 </div>
               </div>
             </div>
@@ -434,71 +744,126 @@ export default function Execution() {
               </div>
             </div>
 
-            <div className="glass-card glow-border p-5 border-cyber-red/20">
-              <h2 className="section-title mb-4 flex items-center gap-2 text-cyber-red">
-                <OctagonAlert className="w-5 h-5" />
-                紧急中止
-              </h2>
-              {!showAbortDialog ? (
-                <div className="space-y-4">
-                  <p className="text-sm text-slate-400">
-                    中止操作将立即终止当前任务的所有流程，进入安全处置程序。此操作不可逆，请谨慎执行。
-                  </p>
-                  <button
-                    onClick={() => setShowAbortDialog(true)}
-                    className="btn-danger w-full flex items-center justify-center gap-2 py-3 text-lg font-semibold"
-                  >
-                    <OctagonAlert className="w-5 h-5" />
-                    紧急中止
-                  </button>
-                </div>
-              ) : (
-                <div className="space-y-4">
-                  <div className="p-3 rounded-lg bg-cyber-red/10 border border-cyber-red/30">
-                    <div className="flex items-center gap-2 text-cyber-red font-semibold mb-2">
-                      <AlertTriangle className="w-4 h-4" />
-                      <span>确认中止任务</span>
-                    </div>
+            <div className="space-y-4">
+              <div className="glass-card glow-border p-5 border-cyber-red/20">
+                <h2 className="section-title mb-4 flex items-center gap-2 text-cyber-red">
+                  <OctagonAlert className="w-5 h-5" />
+                  紧急中止
+                </h2>
+                {!showAbortDialog ? (
+                  <div className="space-y-4">
                     <p className="text-sm text-slate-400">
-                      确认中止「{selectedTask.name}」？此操作不可撤销。
+                      中止操作将立即终止当前任务的所有流程，进入安全处置程序。此操作不可逆，请谨慎执行。
                     </p>
+                    <button
+                      onClick={() => setShowAbortDialog(true)}
+                      className="btn-danger w-full flex items-center justify-center gap-2 py-3 text-lg font-semibold"
+                    >
+                      <OctagonAlert className="w-5 h-5" />
+                      紧急中止
+                    </button>
                   </div>
-                  <div>
-                    <label className="label-field">中止原因</label>
-                    <textarea
-                      value={abortReason}
-                      onChange={(e) => setAbortReason(e.target.value)}
-                      placeholder="请输入中止原因..."
-                      className="input-field min-h-[80px] resize-none"
-                      rows={3}
-                    />
-                  </div>
-                  {selectedTask.backupPlan && (
+                ) : (
+                  <div className="space-y-4">
+                    <div className="p-3 rounded-lg bg-cyber-red/10 border border-cyber-red/30">
+                      <div className="flex items-center gap-2 text-cyber-red font-semibold mb-2">
+                        <AlertTriangle className="w-4 h-4" />
+                        <span>确认中止任务</span>
+                      </div>
+                      <p className="text-sm text-slate-400">
+                        确认中止「{selectedTask.name}」？此操作不可撤销。
+                      </p>
+                    </div>
                     <div>
-                      <label className="label-field">备选方案</label>
+                      <label className="label-field">中止原因</label>
+                      <textarea
+                        value={abortReason}
+                        onChange={(e) => setAbortReason(e.target.value)}
+                        placeholder="请输入中止原因..."
+                        className="input-field min-h-[80px] resize-none"
+                        rows={3}
+                      />
+                    </div>
+                    {selectedTask.backupPlan && (
+                      <div>
+                        <label className="label-field">备选方案</label>
+                        <div className="p-2.5 rounded-lg bg-cyber-blue/10 border border-cyber-blue/20 text-sm text-cyber-blue">
+                          {selectedTask.backupPlan}
+                        </div>
+                      </div>
+                    )}
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleAbort}
+                        disabled={!abortReason.trim()}
+                        className="btn-danger flex-1 flex items-center justify-center gap-2 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                      >
+                        <OctagonAlert className="w-4 h-4" />
+                        确认中止
+                      </button>
+                      <button
+                        onClick={() => { setShowAbortDialog(false); setAbortReason(''); }}
+                        className="btn-primary flex-1 py-2.5"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
+
+              <div className="glass-card glow-border p-5 border-cyber-blue/20">
+                <h2 className="section-title mb-4 flex items-center gap-2">
+                  <ArrowLeftRight className="w-5 h-5" />
+                  切换备用方案
+                </h2>
+                {!showSwitchConfirm ? (
+                  <div className="space-y-3">
+                    <p className="text-sm text-slate-400">
+                      将任务切换至备用工位和发射窗口，自动分配可用人员。当前方案数据将保留。
+                    </p>
+                    {selectedTask.backupPlan ? (
                       <div className="p-2.5 rounded-lg bg-cyber-blue/10 border border-cyber-blue/20 text-sm text-cyber-blue">
                         {selectedTask.backupPlan}
                       </div>
-                    </div>
-                  )}
-                  <div className="flex gap-3">
+                    ) : (
+                      <div className="p-2.5 rounded-lg bg-slate-700/30 border border-slate-600/30 text-sm text-slate-500">
+                        系统将自动寻找可用工位和窗口
+                      </div>
+                    )}
                     <button
-                      onClick={handleAbort}
-                      disabled={!abortReason.trim()}
-                      className="btn-danger flex-1 flex items-center justify-center gap-2 py-2.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                      onClick={() => setShowSwitchConfirm(true)}
+                      className="btn-primary w-full flex items-center justify-center gap-2 py-2.5"
                     >
-                      <OctagonAlert className="w-4 h-4" />
-                      确认中止
-                    </button>
-                    <button
-                      onClick={() => { setShowAbortDialog(false); setAbortReason(''); }}
-                      className="btn-primary flex-1 py-2.5"
-                    >
-                      取消
+                      <ArrowLeftRight className="w-4 h-4" />
+                      切换到备用方案
                     </button>
                   </div>
-                </div>
-              )}
+                ) : (
+                  <div className="space-y-3">
+                    <div className="p-3 rounded-lg bg-cyber-blue/10 border border-cyber-blue/30">
+                      <p className="text-sm text-cyber-blue">
+                        确认将「{selectedTask.name}」切换到备用方案？任务工位、窗口、人员将重新分配，检查单将重置。
+                      </p>
+                    </div>
+                    <div className="flex gap-3">
+                      <button
+                        onClick={handleSwitchToBackup}
+                        className="btn-success flex-1 flex items-center justify-center gap-2 py-2.5"
+                      >
+                        <CheckCircle2 className="w-4 h-4" />
+                        确认切换
+                      </button>
+                      <button
+                        onClick={() => setShowSwitchConfirm(false)}
+                        className="btn-primary flex-1 py-2.5"
+                      >
+                        取消
+                      </button>
+                    </div>
+                  </div>
+                )}
+              </div>
             </div>
           </div>
         </>

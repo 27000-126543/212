@@ -44,6 +44,7 @@ interface AppState {
   approveAdjustmentAndNotify: (taskId: string, personnelId: string, approved: boolean, comment: string) => void;
   confirmScheduleAndPush: () => void;
   abortTaskAndSwitch: (taskId: string, reason: string) => void;
+  switchToBackupPlan: (taskId: string) => void;
   addMaintenanceOrder: (order: MaintenanceOrder) => void;
   updateMaintenanceOrder: (id: string, data: Partial<MaintenanceOrder>) => void;
   useSparePart: (partId: string, quantity: number) => void;
@@ -451,6 +452,76 @@ export const useStore = create<AppState>()(
             read: false,
             fromUser: '系统',
           }, ...s.notifications],
+        };
+      }),
+      switchToBackupPlan: (taskId) => set((s) => {
+        const task = s.tasks.find((t) => t.id === taskId);
+        if (!task) return s;
+
+        const alternativePads = s.launchPads.filter(
+          (p) => p.id !== task.padId && p.status !== 'maintenance'
+        );
+        const altPad = alternativePads[0];
+        if (!altPad) return s;
+
+        const altWindow = s.launchWindows.find(
+          (w) => w.padId === altPad.id && w.available
+        );
+        const newScheduledTime = altWindow
+          ? altWindow.startTime
+          : new Date(Date.now() + 72 * 3600 * 1000).toISOString();
+        const newPadName = altPad.name;
+        const newWindowId = altWindow?.id ?? '';
+
+        const availablePersonnel = s.personnel.filter((p) => p.status === 'available');
+        const assignCommander = availablePersonnel.find((p) => p.role === 'commander');
+        const assignFueler = availablePersonnel.find((p) => p.role === 'fueler');
+        const assignTelemetry = availablePersonnel.find((p) => p.role === 'telemetry_op');
+        const assignSafety = availablePersonnel.find((p) => p.role === 'safety_officer');
+
+        const newAssignments = [
+          assignCommander ? { personnelId: assignCommander.id, personnelName: assignCommander.name, role: 'commander' as const, confirmed: false, adjustmentRequested: false, adjustmentReason: '', approved: null } : null,
+          assignFueler ? { personnelId: assignFueler.id, personnelName: assignFueler.name, role: 'fueler' as const, confirmed: false, adjustmentRequested: false, adjustmentReason: '', approved: null } : null,
+          assignTelemetry ? { personnelId: assignTelemetry.id, personnelName: assignTelemetry.name, role: 'telemetry_op' as const, confirmed: false, adjustmentRequested: false, adjustmentReason: '', approved: null } : null,
+          assignSafety ? { personnelId: assignSafety.id, personnelName: assignSafety.name, role: 'safety_officer' as const, confirmed: false, adjustmentRequested: false, adjustmentReason: '', approved: null } : null,
+        ].filter(Boolean) as LaunchTask['assignedPersonnel'];
+
+        return {
+          tasks: s.tasks.map((t) => t.id === taskId ? {
+            ...t,
+            padId: altPad.id,
+            padName: newPadName,
+            windowId: newWindowId,
+            scheduledTime: newScheduledTime,
+            status: 'scheduled' as const,
+            abortReason: '',
+            backupPlan: '',
+            assignedPersonnel: newAssignments,
+            checklist: t.checklist.map((c) => ({ ...c, status: 'pending' as const, checkedAt: null })),
+          } : t),
+          launchPads: s.launchPads.map((p) => {
+            if (p.id === task.padId) return { ...p, status: 'idle' as const };
+            if (p.id === altPad.id) return { ...p, status: 'preparing' as const };
+            return p;
+          }),
+          notifications: [{
+            id: `notif-switch-${Date.now()}`,
+            type: 'system' as const,
+            title: '备用方案已激活',
+            content: `「${task.name}」已切换至${newPadName}，计划发射时间：${new Date(newScheduledTime).toLocaleString('zh-CN')}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            fromUser: '系统',
+          }, ...s.notifications],
+          alerts: [{
+            id: `alert-switch-${Date.now()}`,
+            taskId: task.id,
+            taskName: task.name,
+            level: 'info' as const,
+            message: `任务已切换至${newPadName}，新计划时间：${new Date(newScheduledTime).toLocaleString('zh-CN')}`,
+            timestamp: new Date().toISOString(),
+            acknowledged: false,
+          }, ...s.alerts],
         };
       }),
       addMaintenanceOrder: (order) => set((s) => ({ maintenanceOrders: [...s.maintenanceOrders, order] })),
