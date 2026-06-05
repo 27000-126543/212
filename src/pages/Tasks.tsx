@@ -211,7 +211,8 @@ function TaskCard({
 
 function ApprovalTab() {
   const tasks = useStore((s) => s.tasks);
-  const approveAdjustment = useStore((s) => s.approveAdjustment);
+  const approveAdjustmentAndNotify = useStore((s) => s.approveAdjustmentAndNotify);
+  const [commentMap, setCommentMap] = useState<Record<string, string>>({});
 
   const pendingRequests = useMemo(() => {
     const result: { taskId: string; taskName: string; assignment: TaskAssignment }[] = [];
@@ -280,20 +281,29 @@ function ApprovalTab() {
                   </div>
                   <div className="flex items-center gap-2 flex-shrink-0">
                     <button
-                      onClick={() => approveAdjustment(req.taskId, req.assignment.personnelId, true)}
+                      onClick={() => approveAdjustmentAndNotify(req.taskId, req.assignment.personnelId, true, commentMap[`${req.taskId}-${req.assignment.personnelId}`] || '')}
                       className="btn-success py-1.5 px-4 text-xs flex items-center gap-1.5"
                     >
                       <CheckCircle2 className="w-3.5 h-3.5" />
                       同意
                     </button>
                     <button
-                      onClick={() => approveAdjustment(req.taskId, req.assignment.personnelId, false)}
+                      onClick={() => approveAdjustmentAndNotify(req.taskId, req.assignment.personnelId, false, commentMap[`${req.taskId}-${req.assignment.personnelId}`] || '')}
                       className="btn-danger py-1.5 px-4 text-xs flex items-center gap-1.5"
                     >
                       <X className="w-3.5 h-3.5" />
                       驳回
                     </button>
                   </div>
+                </div>
+                <div className="mt-2">
+                  <input
+                    type="text"
+                    placeholder="审批意见（可选）"
+                    value={commentMap[`${req.taskId}-${req.assignment.personnelId}`] || ''}
+                    onChange={(e) => setCommentMap((prev) => ({ ...prev, [`${req.taskId}-${req.assignment.personnelId}`]: e.target.value }))}
+                    className="input-field text-xs py-1.5"
+                  />
                 </div>
               </div>
             ))}
@@ -449,8 +459,9 @@ function NotificationTab() {
 
 export default function Tasks() {
   const tasks = useStore((s) => s.tasks);
-  const confirmAssignment = useStore((s) => s.confirmAssignment);
-  const requestAdjustment = useStore((s) => s.requestAdjustment);
+  const confirmAndNotify = useStore((s) => s.confirmAndNotify);
+  const requestAdjustmentAndNotify = useStore((s) => s.requestAdjustmentAndNotify);
+  const approveAdjustmentAndNotify = useStore((s) => s.approveAdjustmentAndNotify);
 
   const [activeTab, setActiveTab] = useState<TabKey>('assign');
 
@@ -517,8 +528,8 @@ export default function Tasks() {
               <TaskCard
                 key={task.id}
                 task={task}
-                onConfirm={confirmAssignment}
-                onRequestAdjust={requestAdjustment}
+                onConfirm={confirmAndNotify}
+                onRequestAdjust={requestAdjustmentAndNotify}
               />
             ))}
           </div>

@@ -2,10 +2,11 @@ import { useState, useMemo } from 'react';
 import {
   Wrench, Package, Plus, ArrowRight, X,
   Clock, AlertTriangle, CheckCircle2, Zap,
-  Thermometer, Activity, ChevronRight
+  Thermometer, Activity, ChevronRight, Sparkles
 } from 'lucide-react';
 import { useStore } from '@/store';
 import type { MaintenanceOrder, SparePart } from '@/types';
+import { autoGenerateMaintenanceOrders } from '@/utils/scheduler';
 
 type TabKey = 'orders' | 'spareParts';
 
@@ -585,6 +586,10 @@ export default function Maintenance() {
   const [showAddForm, setShowAddForm] = useState(false);
   const [prefillEquipment, setPrefillEquipment] = useState<{ id: string; name: string } | undefined>();
   const addMaintenanceOrder = useStore((s) => s.addMaintenanceOrder);
+  const equipmentStore = useStore((s) => s.equipment);
+  const maintenanceOrdersStore = useStore((s) => s.maintenanceOrders);
+  const sparePartsStore = useStore((s) => s.spareParts);
+  const useSparePart = useStore((s) => s.useSparePart);
 
   const handleCreateOrder = (eqId: string, eqName: string) => {
     setPrefillEquipment({ id: eqId, name: eqName });
@@ -597,12 +602,46 @@ export default function Maintenance() {
     setPrefillEquipment(undefined);
   };
 
+  const handleAutoGenerate = () => {
+    const result = autoGenerateMaintenanceOrders(equipmentStore, maintenanceOrdersStore, sparePartsStore);
+    for (const order of result.orders) {
+      const id = `mo-auto-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+      addMaintenanceOrder({
+        id,
+        equipmentId: order.equipmentId!,
+        equipmentName: order.equipmentName!,
+        type: order.type!,
+        reason: order.reason!,
+        status: order.status!,
+        assignedTeam: order.assignedTeam!,
+        partsUsed: order.partsUsed!,
+        createdAt: order.createdAt!,
+        completedAt: order.completedAt,
+        priority: order.priority!,
+        estimatedHours: order.estimatedHours!,
+        actualHours: order.actualHours!,
+      });
+    }
+    for (const deduction of result.partDeductions) {
+      useSparePart(deduction.partId, deduction.quantity);
+    }
+  };
+
   return (
     <div className="space-y-6">
-      <h1 className="page-title flex items-center gap-3">
-        <Wrench className="w-7 h-7 text-cyber-blue" />
-        设备维保管理
-      </h1>
+      <div className="flex items-center justify-between">
+        <h1 className="page-title flex items-center gap-3">
+          <Wrench className="w-7 h-7 text-cyber-blue" />
+          设备维保管理
+        </h1>
+        <button
+          onClick={handleAutoGenerate}
+          className="btn-primary flex items-center gap-2 text-sm"
+        >
+          <Sparkles className="w-4 h-4" />
+          自动生成工单
+        </button>
+      </div>
 
       <div className="flex gap-1 p-1 bg-space-800/60 border border-cyber-blue/10 rounded-lg w-fit">
         {TABS.map((tab) => (

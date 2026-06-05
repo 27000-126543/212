@@ -37,6 +37,13 @@ interface AppState {
   approveAdjustment: (taskId: string, personnelId: string, approved: boolean) => void;
   addScheduleItem: (item: ScheduleItem) => void;
   updateScheduleItem: (id: string, data: Partial<ScheduleItem>) => void;
+  replaceScheduleItems: (items: ScheduleItem[]) => void;
+  batchUpdateTasks: (updates: { id: string; changes: Partial<LaunchTask> }[]) => void;
+  confirmAndNotify: (taskId: string, personnelId: string) => void;
+  requestAdjustmentAndNotify: (taskId: string, personnelId: string, reason: string) => void;
+  approveAdjustmentAndNotify: (taskId: string, personnelId: string, approved: boolean, comment: string) => void;
+  confirmScheduleAndPush: () => void;
+  abortTaskAndSwitch: (taskId: string, reason: string) => void;
   addMaintenanceOrder: (order: MaintenanceOrder) => void;
   updateMaintenanceOrder: (id: string, data: Partial<MaintenanceOrder>) => void;
   useSparePart: (partId: string, quantity: number) => void;
@@ -289,6 +296,163 @@ export const useStore = create<AppState>()(
       updateScheduleItem: (id, data) => set((s) => ({
         scheduleItems: s.scheduleItems.map((si) => si.id === id ? { ...si, ...data } : si),
       })),
+      replaceScheduleItems: (items) => set({ scheduleItems: items }),
+      batchUpdateTasks: (updates) => set((s) => ({
+        tasks: s.tasks.map((t) => {
+          const update = updates.find((u) => u.id === t.id);
+          return update ? { ...t, ...update.changes } : t;
+        }),
+      })),
+      confirmAndNotify: (taskId, personnelId) => set((s) => {
+        const task = s.tasks.find((t) => t.id === taskId);
+        if (!task) return s;
+        const person = task.assignedPersonnel.find((a) => a.personnelId === personnelId);
+        if (!person) return s;
+        return {
+          tasks: s.tasks.map((t) => t.id === taskId ? {
+            ...t,
+            assignedPersonnel: t.assignedPersonnel.map((a) =>
+              a.personnelId === personnelId ? { ...a, confirmed: true } : a
+            ),
+          } : t),
+          notifications: [{
+            id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'task_assign' as const,
+            title: '任务确认通知',
+            content: `${person.personnelName}已确认「${task.name}」任务分配`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            fromUser: person.personnelName,
+          }, ...s.notifications],
+        };
+      }),
+      requestAdjustmentAndNotify: (taskId, personnelId, reason) => set((s) => {
+        const task = s.tasks.find((t) => t.id === taskId);
+        if (!task) return s;
+        const person = task.assignedPersonnel.find((a) => a.personnelId === personnelId);
+        if (!person) return s;
+        return {
+          tasks: s.tasks.map((t) => t.id === taskId ? {
+            ...t,
+            assignedPersonnel: t.assignedPersonnel.map((a) =>
+              a.personnelId === personnelId ? { ...a, adjustmentRequested: true, adjustmentReason: reason, approved: null } : a
+            ),
+          } : t),
+          notifications: [{
+            id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'approval_request' as const,
+            title: '调整申请待审批',
+            content: `${person.personnelName}（${person.role === 'commander' ? '指挥员' : person.role === 'fueler' ? '加注手' : person.role === 'telemetry_op' ? '测控操作员' : '安全员'}）申请调整「${task.name}」，原因：${reason}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            fromUser: person.personnelName,
+          }, ...s.notifications],
+          alerts: [{
+            id: `alert-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            taskId: task.id,
+            taskName: task.name,
+            level: 'warning' as const,
+            message: `${person.personnelName}申请调整任务，原因：${reason}`,
+            timestamp: new Date().toISOString(),
+            acknowledged: false,
+          }, ...s.alerts],
+        };
+      }),
+      approveAdjustmentAndNotify: (taskId, personnelId, approved, comment) => set((s) => {
+        const task = s.tasks.find((t) => t.id === taskId);
+        if (!task) return s;
+        const person = task.assignedPersonnel.find((a) => a.personnelId === personnelId);
+        if (!person) return s;
+        return {
+          tasks: s.tasks.map((t) => t.id === taskId ? {
+            ...t,
+            assignedPersonnel: t.assignedPersonnel.map((a) =>
+              a.personnelId === personnelId ? {
+                ...a,
+                approved,
+                adjustmentRequested: !approved,
+                confirmed: approved ? true : a.confirmed,
+              } : a
+            ),
+          } : t),
+          notifications: [{
+            id: `notif-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+            type: 'approval_result' as const,
+            title: approved ? '调整申请已同意' : '调整申请已驳回',
+            content: `总指挥${approved ? '同意' : '驳回'}了「${task.name}」${person.personnelName}的调整申请${comment ? '，意见：' + comment : ''}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            fromUser: '总指挥',
+          }, ...s.notifications],
+        };
+      }),
+      confirmScheduleAndPush: () => set((s) => {
+        const scheduledTasks = s.tasks.filter((t) => t.status === 'draft' || t.status === 'scheduled');
+        const notifications = scheduledTasks.map((task) => ({
+          id: `notif-sch-${task.id}-${Date.now()}`,
+          type: 'system' as const,
+          title: '排程已确认',
+          content: `「${task.name}」排程已确认，计划发射时间：${new Date(task.scheduledTime).toLocaleString('zh-CN')}，工位：${task.padName}`,
+          timestamp: new Date().toISOString(),
+          read: false,
+          fromUser: '系统',
+        }));
+        const updatedTasks = s.tasks.map((t) => {
+          if (t.status === 'draft') return { ...t, status: 'scheduled' as const };
+          return t;
+        });
+        const pushNotifications = updatedTasks.flatMap((t) =>
+          t.assignedPersonnel
+            .filter((a) => !a.confirmed && !a.adjustmentRequested)
+            .map((a) => ({
+              id: `notif-push-${t.id}-${a.personnelId}-${Date.now()}`,
+              type: 'task_assign' as const,
+              title: '任务分配通知',
+              content: `您已被分配至「${t.name}」任务（${t.padName}/${t.rocketName}），计划时间：${new Date(t.scheduledTime).toLocaleString('zh-CN')}，请尽快确认`,
+              timestamp: new Date().toISOString(),
+              read: false,
+              fromUser: '系统',
+            }))
+        );
+        return {
+          tasks: updatedTasks,
+          notifications: [...notifications, ...pushNotifications, ...s.notifications],
+        };
+      }),
+      abortTaskAndSwitch: (taskId, reason) => set((s) => {
+        const task = s.tasks.find((t) => t.id === taskId);
+        if (!task) return s;
+        const backupPlan = task.backupPlan || '暂无备用方案';
+        return {
+          tasks: s.tasks.map((t) => t.id === taskId ? {
+            ...t,
+            status: 'aborted' as const,
+            abortReason: reason,
+          } : t),
+          launchPads: s.launchPads.map((p) => p.id === task.padId ? {
+            ...p,
+            status: 'idle' as const,
+          } : p),
+          alerts: [{
+            id: `alert-abort-${Date.now()}`,
+            taskId: task.id,
+            taskName: task.name,
+            level: 'emergency' as const,
+            message: `任务已中止，原因：${reason}。${backupPlan}`,
+            timestamp: new Date().toISOString(),
+            acknowledged: false,
+          }, ...s.alerts],
+          notifications: [{
+            id: `notif-abort-${Date.now()}`,
+            type: 'alert' as const,
+            title: '任务中止通知',
+            content: `「${task.name}」已中止，原因：${reason}。备选方案：${backupPlan}`,
+            timestamp: new Date().toISOString(),
+            read: false,
+            fromUser: '系统',
+          }, ...s.notifications],
+        };
+      }),
       addMaintenanceOrder: (order) => set((s) => ({ maintenanceOrders: [...s.maintenanceOrders, order] })),
       updateMaintenanceOrder: (id, data) => set((s) => ({
         maintenanceOrders: s.maintenanceOrders.map((m) => m.id === id ? { ...m, ...data } : m),

@@ -51,6 +51,7 @@ function formatCountdown(totalSeconds: number): string {
 export default function Execution() {
   const tasks = useStore((s) => s.tasks);
   const updateTask = useStore((s) => s.updateTask);
+  const abortTaskAndSwitch = useStore((s) => s.abortTaskAndSwitch);
 
   const activeTasks = useMemo(
     () => tasks.filter((t) => ['preparing', 'fueling', 'scheduled'].includes(t.status)),
@@ -162,11 +163,11 @@ export default function Execution() {
 
   const handleAbort = useCallback(() => {
     if (!selectedTask || !abortReason.trim()) return;
-    updateTask(selectedTask.id, { status: 'aborted', abortReason: abortReason.trim() });
+    abortTaskAndSwitch(selectedTask.id, abortReason.trim());
     setShowAbortDialog(false);
     setAbortReason('');
     setSelectedTaskId('');
-  }, [selectedTask, abortReason, updateTask]);
+  }, [selectedTask, abortReason, abortTaskAndSwitch]);
 
   const handlePhaseTransition = useCallback(
     (nextStatus: LaunchTask['status']) => {

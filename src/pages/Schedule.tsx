@@ -5,6 +5,7 @@ import {
 } from 'lucide-react';
 import { useStore } from '@/store';
 import type { ScheduleItem, ScheduleConflict } from '@/types';
+import { generateSchedule } from '@/utils/scheduler';
 
 const PRIORITY_COLORS: Record<string, { bar: string; bg: string; text: string; border: string }> = {
   critical: { bar: '#FF3B3B', bg: 'rgba(255,59,59,0.25)', text: 'text-cyber-red', border: 'border-cyber-red/40' },
@@ -338,6 +339,14 @@ function ConflictPanel({ conflicts }: { conflicts: (ScheduleConflict & { taskNam
 export default function Schedule() {
   const scheduleItems = useStore((s) => s.scheduleItems);
   const launchPads = useStore((s) => s.launchPads);
+  const tasks = useStore((s) => s.tasks);
+  const rocketModels = useStore((s) => s.rocketModels);
+  const launchWindows = useStore((s) => s.launchWindows);
+  const equipment = useStore((s) => s.equipment);
+  const personnel = useStore((s) => s.personnel);
+  const replaceScheduleItems = useStore((s) => s.replaceScheduleItems);
+  const batchUpdateTasks = useStore((s) => s.batchUpdateTasks);
+  const confirmScheduleAndPush = useStore((s) => s.confirmScheduleAndPush);
 
   const [constraintToggles, setConstraintToggles] = useState<Record<string, boolean>>({
     transition: true,
@@ -372,11 +381,31 @@ export default function Schedule() {
     setIsGenerating(true);
     setIsConfirmed(false);
     setTimeout(() => {
+      const result = generateSchedule({
+        tasks,
+        pads: launchPads,
+        rockets: rocketModels,
+        windows: launchWindows,
+        equipment,
+        personnel,
+        constraints: {
+          enforceTransition: constraintToggles.transition,
+          minTransitionDays: 7,
+          enforceCooling: constraintToggles.cooling,
+          enforceWeather: constraintToggles.weather,
+        },
+        priorityWeights: weights,
+      });
+      replaceScheduleItems(result.scheduleItems);
+      if (result.updatedTasks.length > 0) {
+        batchUpdateTasks(result.updatedTasks);
+      }
       setIsGenerating(false);
-    }, 1500);
+    }, 800);
   };
 
   const handleConfirm = () => {
+    confirmScheduleAndPush();
     setIsConfirmed(true);
   };
 
